@@ -53,13 +53,14 @@ export function Home() {
         <div className="flex flex-wrap gap-6">
           {stablecoins.map(({ id, label }) => {
             const p = prices?.[id];
-            const usdPrice = p?.usd ?? 1.0000;
-            const deviation = Math.abs(usdPrice - 1.0) * 100;
+            const isEurc = id === 'euro-coin';
+            const pegPrice = isEurc ? (p?.eur ?? 1.0000) : (p?.usd ?? 1.0000);
+            const deviation = Math.abs(pegPrice - 1.0) * 100;
             const stable = deviation < 0.5;
             return (
               <div key={id} className="flex items-center gap-2">
                 <span className="text-[#7A9B88] text-sm">{label}</span>
-                <span className="text-white font-mono text-sm">${usdPrice.toFixed(4)}</span>
+                <span className="text-white font-mono text-sm">{isEurc ? '€' : '$'}{pegPrice.toFixed(4)}</span>
                 <span className={`text-xs font-semibold ${stable ? 'text-green-400' : 'text-yellow-400'}`}>
                   {stable ? 'PEG ✓' : `Δ${deviation.toFixed(2)}%`}
                 </span>

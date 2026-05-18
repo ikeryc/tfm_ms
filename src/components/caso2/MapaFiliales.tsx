@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
 import { Plus, Minus, RotateCcw, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { FILIALES } from '../../lib/constants';
@@ -14,6 +14,42 @@ const DEFAULT_CENTER: [number, number] = [-20, 20];
 const DEFAULT_ZOOM = 1;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
+
+type EnrichedFilial = (typeof FILIALES)[number] & { balance: number };
+
+type MarkerGroup = {
+  id: string;
+  coordinates: [number, number];
+  members: EnrichedFilial[];
+  isCluster: boolean;
+  isHQ: boolean;
+};
+
+function clusterMarkers(markers: EnrichedFilial[], threshold = 0.5): MarkerGroup[] {
+  const visited = new Set<number>();
+  const groups: MarkerGroup[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    if (visited.has(i)) continue;
+    const members = [markers[i]];
+    visited.add(i);
+    for (let j = i + 1; j < markers.length; j++) {
+      if (visited.has(j)) continue;
+      const dx = markers[i].coordinates[0] - markers[j].coordinates[0];
+      const dy = markers[i].coordinates[1] - markers[j].coordinates[1];
+      if (Math.sqrt(dx * dx + dy * dy) < threshold) { members.push(markers[j]); visited.add(j); }
+    }
+    const cx = members.reduce((s, m) => s + m.coordinates[0], 0) / members.length;
+    const cy = members.reduce((s, m) => s + m.coordinates[1], 0) / members.length;
+    groups.push({
+      id: members.length > 1 ? `cluster-${markers[i].id}` : members[0].id,
+      coordinates: [cx, cy],
+      members,
+      isCluster: members.length > 1,
+      isHQ: members.some((m) => m.isHQ),
+    });
+  }
+  return groups;
+}
 
 function nodeColor(balance: number, target: number) {
   if (balance > target * 1.1) return '#22C55E';
@@ -42,7 +78,9 @@ export function MapaFiliales({ onSweepReady: _onSweepReady, transferFlow, sweepF
     balance: balances.find((b) => b.id === f.id)?.balance ?? f.balance,
   }));
 
-  const selectedFilial = enriched.find((f) => f.id === selected);
+  const clusters = useMemo(() => clusterMarkers(enriched), [enriched]);
+  const selectedGroup = clusters.find((g) => g.id === selected);
+
   const excedentes = enriched.filter((f) => f.balance > f.target * 1.1);
   const deficitarios = enriched.filter((f) => f.balance < f.target * 0.9);
 
@@ -58,13 +96,12 @@ export function MapaFiliales({ onSweepReady: _onSweepReady, transferFlow, sweepF
     setPosition({ coordinates: DEFAULT_CENTER, zoom: DEFAULT_ZOOM });
   }
 
-  function handleSelectFromList(f: (typeof enriched)[number]) {
-    if (selected === f.id) {
-      setSelected(null);
-      return;
-    }
-    setSelected(f.id);
-    setPosition((p) => ({ coordinates: f.coordinates, zoom: Math.max(p.zoom, 3) }));
+  function handleSelectFromList(f: EnrichedFilial) {
+    const group = clusters.find((g) => g.members.some((m) => m.id === f.id));
+    if (!group) return;
+    if (selected === group.id) { setSelected(null); return; }
+    setSelected(group.id);
+    setPosition((p) => ({ coordinates: group.coordinates, zoom: Math.max(p.zoom, 3) }));
   }
 
   const showFlow = !!(transferFlow || sweepFlow);
@@ -148,30 +185,35 @@ export function MapaFiliales({ onSweepReady: _onSweepReady, transferFlow, sweepF
 
           {(() => {
             const z = Math.sqrt(position.zoom);
-            return enriched.map((f) => {
-              const color = nodeColor(f.balance, f.target);
-              const isSelected = selected === f.id;
+            return clusters.map((group) => {
+              const isSelected = selected === group.id;
+              const clusterBalance = group.members.reduce((s, m) => s + m.balance, 0);
+              const clusterTarget  = group.members.reduce((s, m) => s + m.target,  0);
+              const color = nodeColor(clusterBalance, clusterTarget);
+              const baseR = group.isCluster ? 9 : (group.isHQ ? 7 : 6);
               return (
                 <Marker
-                  key={f.id}
-                  coordinates={f.coordinates}
-                  onClick={() => setSelected(f.id === selected ? null : f.id)}
+                  key={group.id}
+                  coordinates={group.coordinates}
+                  onClick={() => setSelected(group.id === selected ? null : group.id)}
                   style={{ cursor: 'pointer' }}
                 >
                   <circle
-                    r={(f.isHQ ? 9 : 6) / z}
+                    r={baseR / z}
                     fill={color}
                     fillOpacity={isSelected ? 1 : 0.85}
                     stroke={isSelected ? '#3D9E63' : '#0A2116'}
                     strokeWidth={(isSelected ? 3 : 1.5) / z}
                   />
-                  {/* <text
-                    textAnchor="middle"
-                    y={-12 / z}
-                    style={{ fontSize: `${9 / z}px`, fill: '#fff', fontFamily: 'Inter, sans-serif', pointerEvents: 'none' }}
-                  >
-                    {f.name}
-                  </text> */}
+                  {group.isCluster && (
+                    <text
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      style={{ fontSize: `${6 / z}px`, fill: '#fff', fontFamily: 'Inter, sans-serif', pointerEvents: 'none', fontWeight: 'bold' }}
+                    >
+                      {group.members.length}
+                    </text>
+                  )}
                 </Marker>
               );
             });
@@ -181,24 +223,63 @@ export function MapaFiliales({ onSweepReady: _onSweepReady, transferFlow, sweepF
 
       {/* Panel flotante inferior izquierdo */}
       <div className="absolute bottom-4 left-4 z-10 w-56">
-        {/* Filial seleccionada */}
-        {selectedFilial && (
+        {/* Filial / cluster seleccionado */}
+        {selectedGroup && (
           <div className="bg-[#0A2116]/90 backdrop-blur-sm border border-[#3D9E63]/40 rounded-lg p-3 mb-2">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: nodeColor(selectedFilial.balance, selectedFilial.target) }} />
-              <span className="text-white font-semibold text-xs truncate">{selectedFilial.name}</span>
-              {selectedFilial.isHQ && <span className="text-[#3D9E63] text-[10px] shrink-0">HQ</span>}
-            </div>
-            <div className="space-y-1 text-xs">
-              <div className="flex justify-between"><span className="text-[#7A9B88]">Saldo</span><span className="text-white font-mono">{eur(selectedFilial.balance / 1_000_000, 2)}M€</span></div>
-              <div className="flex justify-between"><span className="text-[#7A9B88]">Target</span><span className="text-white font-mono">{eur(selectedFilial.target / 1_000_000, 2)}M€</span></div>
-              <div className="flex justify-between">
-                <span className="text-[#7A9B88]">Posición</span>
-                <span className={`font-semibold ${selectedFilial.balance > selectedFilial.target ? 'text-green-400' : 'text-red-400'}`}>
-                  {selectedFilial.balance > selectedFilial.target ? '+' : ''}{eur((selectedFilial.balance - selectedFilial.target) / 1_000_000, 2)}M€
-                </span>
-              </div>
-            </div>
+            {selectedGroup.isCluster ? (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-white font-semibold text-xs truncate">{selectedGroup.members[0].city}</span>
+                  <span className="text-[#3D9E63] text-[10px] shrink-0">{selectedGroup.members.length} filiales</span>
+                </div>
+                <div className="space-y-2">
+                  {selectedGroup.members.map((m) => (
+                    <div key={m.id} className="space-y-0.5 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: nodeColor(m.balance, m.target) }} />
+                        <span className="text-white font-medium truncate">{m.name}</span>
+                        {m.isHQ && <span className="text-[#3D9E63] text-[10px] shrink-0">HQ</span>}
+                      </div>
+                      <div className="flex justify-between pl-3.5">
+                        <span className="text-[#7A9B88]">Saldo</span>
+                        <span className="text-white font-mono">{eur(m.balance / 1_000_000, 2)}M€</span>
+                      </div>
+                      <div className="flex justify-between pl-3.5">
+                        <span className="text-[#7A9B88]">Posición</span>
+                        <span className={`font-semibold ${m.balance > m.target ? 'text-green-400' : 'text-red-400'}`}>
+                          {m.balance > m.target ? '+' : ''}{eur((m.balance - m.target) / 1_000_000, 2)}M€
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: nodeColor(selectedGroup.members[0].balance, selectedGroup.members[0].target) }} />
+                  <span className="text-white font-semibold text-xs truncate">{selectedGroup.members[0].name}</span>
+                  {selectedGroup.isHQ && <span className="text-[#3D9E63] text-[10px] shrink-0">HQ</span>}
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-[#7A9B88]">Saldo</span>
+                    <span className="text-white font-mono">{eur(selectedGroup.members[0].balance / 1_000_000, 2)}M€</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#7A9B88]">Target</span>
+                    <span className="text-white font-mono">{eur(selectedGroup.members[0].target / 1_000_000, 2)}M€</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#7A9B88]">Posición</span>
+                    <span className={`font-semibold ${selectedGroup.members[0].balance > selectedGroup.members[0].target ? 'text-green-400' : 'text-red-400'}`}>
+                      {selectedGroup.members[0].balance > selectedGroup.members[0].target ? '+' : ''}
+                      {eur((selectedGroup.members[0].balance - selectedGroup.members[0].target) / 1_000_000, 2)}M€
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -219,21 +300,25 @@ export function MapaFiliales({ onSweepReady: _onSweepReady, transferFlow, sweepF
           </button>
           {panelOpen && (
             <div className="border-t border-[#193D2A] max-h-44 overflow-y-auto">
-              {enriched.map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => handleSelectFromList(f)}
-                  className={`w-full flex items-center justify-between px-3 py-1.5 text-xs transition-colors border-b border-[#193D2A]/50 last:border-0 ${
-                    selected === f.id ? 'bg-[#3D9E63]/10 text-white' : 'text-[#7A9B88] hover:text-white hover:bg-[#193D2A]/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: nodeColor(f.balance, f.target) }} />
-                    <span className="truncate">{f.name}</span>
-                  </div>
-                  <span className="font-mono shrink-0 ml-1">{eur(f.balance / 1_000_000, 1)}M</span>
-                </button>
-              ))}
+              {enriched.map((f) => {
+                const group = clusters.find((g) => g.members.some((m) => m.id === f.id));
+                const isActive = group ? selected === group.id : false;
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => handleSelectFromList(f)}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 text-xs transition-colors border-b border-[#193D2A]/50 last:border-0 ${
+                      isActive ? 'bg-[#3D9E63]/10 text-white' : 'text-[#7A9B88] hover:text-white hover:bg-[#193D2A]/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: nodeColor(f.balance, f.target) }} />
+                      <span className="truncate">{f.name}</span>
+                    </div>
+                    <span className="font-mono shrink-0 ml-1">{eur(f.balance / 1_000_000, 1)}M</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

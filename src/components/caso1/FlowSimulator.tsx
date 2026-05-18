@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle, Clock, Loader, Play, RotateCcw } from 'lucide-react';
 import { SectionTitle } from '../ui/SectionTitle';
-import { useGasPrice } from '../../hooks/useGasPrice';
 import { shortHash, timestamp, eur } from '../../lib/format';
 import { FILIALES, CASO1 } from '../../lib/constants';
 import { useTreasury } from '../../context/TreasuryContext';
@@ -28,7 +27,6 @@ export function FlowSimulator({ compact, onPhaseChange }: FlowSimulatorProps = {
   const [startTs, setStartTs] = useState('');
   const [endTs, setEndTs] = useState('');
   const [elapsed, setElapsed] = useState(0);
-  const gas = useGasPrice();
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const fromFilial = FILIALES.find((f) => f.id === fromId);
@@ -37,12 +35,12 @@ export function FlowSimulator({ compact, onPhaseChange }: FlowSimulatorProps = {
   const isValid = amount > 0 && amount <= fromBalance && fromId !== toId;
 
   const steps = useMemo(() => [
-    { id: 1, title: 'Orden de pago ERP', desc: `${fromFilial?.name ?? ''} genera instrucción de pago a ${toFilial?.name ?? ''} vía SAP S/4HANA`, cost: '0 €', duration: STEP_DURATIONS[0] },
-    { id: 2, title: 'On-ramp fiat → stablecoin', desc: 'Custodio Circle convierte EUR a EURC (1:1). Verificación KYC/AML automática.', cost: '0,02%', duration: STEP_DURATIONS[1] },
-    { id: 3, title: 'Ejecución on-chain (Polygon)', desc: 'Transfer de EURC confirmado en la red Polygon.', cost: '~$0.01', duration: STEP_DURATIONS[2] },
-    { id: 4, title: 'Confirmación blockchain', desc: 'Hash de transacción inmutable. 1 bloque de confirmación (~2 s).', cost: '—', duration: STEP_DURATIONS[3] },
-    { id: 5, title: 'Off-ramp stablecoin → fiat', desc: `Custodio destino convierte EURC → ${toFilial?.currency ?? 'EUR'}. Fondos disponibles en cuenta ${toFilial?.name ?? ''}.`, cost: '0,02%', duration: STEP_DURATIONS[4] },
-    { id: 6, title: 'Reconciliación ERP', desc: 'SAP destino registra automáticamente el ingreso. Asiento contable cerrado.', cost: '0 €', duration: STEP_DURATIONS[5] },
+    { id: 1, title: 'Orden de pago ERP', desc: `${fromFilial?.name ?? ''} genera instrucción de pago a ${toFilial?.name ?? ''} vía sistema ERP`, duration: STEP_DURATIONS[0] },
+    { id: 2, title: 'On-ramp fiat → stablecoin', desc: 'Custodio convierte EUR a EURC (1:1).', duration: STEP_DURATIONS[1] },
+    { id: 3, title: 'Ejecución on-chain', desc: 'Transfer de EURC confirmado en la red blockchain.', duration: STEP_DURATIONS[2] },
+    { id: 4, title: 'Confirmación blockchain', desc: 'Hash de transacción inmutable. 1 bloque de confirmación (~2 s).', duration: STEP_DURATIONS[3] },
+    { id: 5, title: 'Off-ramp stablecoin → fiat', desc: `Custodio destino convierte EURC → ${toFilial?.currency ?? 'EUR'}. Fondos disponibles en cuenta ${toFilial?.name ?? ''}.`, duration: STEP_DURATIONS[4] },
+    { id: 6, title: 'Reconciliación ERP', desc: 'ERP destino registra automáticamente el ingreso. Asiento contable cerrado.', duration: STEP_DURATIONS[5] },
   ], [fromFilial?.name, toFilial?.name, toFilial?.currency]);
 
   const totalDuration = STEP_DURATIONS.reduce((a, d) => a + d, 0);
@@ -111,7 +109,7 @@ export function FlowSimulator({ compact, onPhaseChange }: FlowSimulatorProps = {
       {!compact && (
         <SectionTitle
           title="Simulador de flujo end-to-end"
-          subtitle={`Transferencia ${fromFilial?.name ?? ''} → ${toFilial?.name ?? ''} vía EURC sobre Polygon`}
+          subtitle={`Transferencia ${fromFilial?.name ?? ''} → ${toFilial?.name ?? ''} vía EURC sobre red blockchain`}
           source="Elaboración propia"
         />
       )}
@@ -199,11 +197,6 @@ export function FlowSimulator({ compact, onPhaseChange }: FlowSimulatorProps = {
             <span className="text-[#3D9E63] text-sm font-medium">Procesando… {elapsed}s</span>
           </div>
         )}
-        {gas && (
-          <span className="text-[#7A9B88] text-xs ml-auto">
-            Gas Polygon: {gas.propose} Gwei · Bloque #{parseInt(gas.blockNumber, 16).toLocaleString('es-ES')} · Fuente: Polygonscan
-          </span>
-        )}
       </div>
 
       <div className={`grid gap-6 ${compact ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-5'}`}>
@@ -235,7 +228,6 @@ export function FlowSimulator({ compact, onPhaseChange }: FlowSimulatorProps = {
                       <span className="text-[#7A9B88] mr-1">{step.id}.</span>
                       {step.title}
                     </span>
-                    <span className="text-[#7A9B88] text-xs font-mono">{step.cost}</span>
                   </div>
                   <p className="text-[#7A9B88] text-xs mt-0.5">{step.desc}</p>
                   {status === 'done' && step.id === 4 && txHash && (
